@@ -25,23 +25,16 @@ print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV (first 200 chars): {google_credenti
 
 if google_credentials_json_content:
     try:
-        # Більш агресивне очищення та нормалізація перед парсингом
-        # Замінюємо можливі \r\n на просто \n
-        cleaned_json_content = google_credentials_json_content.replace("\r\n", "\n")
-        # Замінюємо екрановані \\n на \n (якщо ENV був закодований таким чином)
-        cleaned_json_content = cleaned_json_content.replace("\\n", "\n")
-        # Видаляємо всі керуючі символи, окрім дозволених JSONом (tab, newline, carriage return)
-        # JSON дозволяє backspace, tab, newline, form feed
-        # Видаляємо символи з діапазону [\x00-\x1F] (контрольні символи ASCII), крім backspace, tab, newline, form feed
-        # та символ DEL
-        cleaned_json_content = re.sub(r'[\x00-\x07\x0B\x0E-\x1F\x7F]', '', cleaned_json_content)
-
+        # Замінюємо всі символи нового рядка на \n
+        cleaned_json_content = google_credentials_json_content.replace("\r\n", "\\n").replace("\n", "\\n")
+        
         # --- DEBUG: Print cleaned content before parse (masked) ---
         print(f"Cleaned GOOGLE_CREDENTIALS_JSON before parse (first 200 chars): {cleaned_json_content[:200] + '...' if cleaned_json_content else 'Empty'}")
         print(f"Length of cleaned string: {len(cleaned_json_content) if cleaned_json_content else 0}")
         # --- END DEBUG ---
 
-        creds_data = json.loads(cleaned_json_content)
+        # Використовуємо json.loads з параметром strict=False для більш гнучкого парсингу
+        creds_data = json.loads(cleaned_json_content, strict=False)
         print("Google credentials JSON успішно розібрано із змінної середовища.")
     except json.JSONDecodeError as e:
         print(f"Fatal Error: Не вдалося розпарсити GOOGLE_CREDENTIALS_JSON як JSON: {e}")
