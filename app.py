@@ -76,7 +76,9 @@ try:
     # Спроба авторизації прямим методом через dict
     gc = gspread.service_account_from_dict(creds_data, scopes=SCOPE)
     print("Google Sheets авторизовано з JSON-даних.")
-except Exception:
+except Exception as e:
+    # Логуємо помилку для діагностики
+    print(f"Error using gspread.service_account_from_dict: {e}")
     # Цей блок, ймовірно, не буде досягнуто на Render, оскільки ми виходимо раніше
     # якщо ENV змінна не парситься, або якщо її немає і немає локального файлу.
     # Але залишаємо його для повноти, якщо код використовується локально без ENV.
