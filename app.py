@@ -1,5 +1,6 @@
 import os
 import json
+import sys # Add sys import for exit
 from datetime import datetime
 from flask import Flask, request, jsonify
 import openai
@@ -41,9 +42,12 @@ if not os.path.exists(credentials_file_path):
                  print(f"{credentials_file_path} written directly from ENV (fallback).")
             except Exception as e:
                  print(f"Fatal Error writing {credentials_file_path} even with fallback: {e}")
-                 # Depending on strictness, you might want to sys.exit(1) here
+                 print("Exiting because credentials.json could not be created.")
+                 sys.exit(1) # Exit with error code
     else:
-        print(f"WARNING: Environment variable GOOGLE_CREDENTIALS_JSON not found and {credentials_file_path} does not exist. Google Sheets authorization may fail.")
+        print(f"WARNING: Environment variable GOOGLE_CREDENTIALS_JSON not found and {credentials_file_path} does not exist.")
+        print("Exiting because credentials.json is required for Google Sheets authorization.")
+        sys.exit(1) # Exit with error code
 else:
     print(f"{credentials_file_path} found locally. Using existing file.")
 # --- End Google Credentials Setup ---
