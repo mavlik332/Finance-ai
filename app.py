@@ -28,22 +28,28 @@ if not os.path.exists(credentials_file_path):
     if google_credentials_json_content:
         print(f"GOOGLE_CREDENTIALS_JSON environment variable found. Writing to {credentials_file_path}")
         try:
-            # Try to load and dump to ensure correct formatting (handle escaped newlines)
-            cred_data = json.loads(google_credentials_json_content.replace("\\n", "\n"))
-            with open(credentials_file_path, "w") as f:
-                json.dump(cred_data, f, indent=None) # Use indent=None to save space
-            print(f"{credentials_file_path} created successfully from ENV.")
+            # First, try to clean the JSON string
+            cleaned_json = google_credentials_json_content.replace("\\n", "\n")
+            # Remove any control characters except newlines
+            cleaned_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned_json)
+            
+            # Try to parse and validate the JSON
+            try:
+                cred_data = json.loads(cleaned_json)
+                # Write the validated JSON
+                with open(credentials_file_path, "w", encoding='utf-8') as f:
+                    json.dump(cred_data, f, indent=None, ensure_ascii=False)
+                print(f"{credentials_file_path} created successfully from ENV.")
+            except json.JSONDecodeError as je:
+                print(f"JSON validation failed: {je}")
+                # If JSON validation fails, try to write the cleaned string directly
+                with open(credentials_file_path, "w", encoding='utf-8') as f:
+                    f.write(cleaned_json)
+                print(f"{credentials_file_path} written directly (JSON validation failed).")
         except Exception as e:
             print(f"Error writing {credentials_file_path} from ENV: {e}")
-            # Fallback to writing directly, replacing escaped newlines
-            try:
-                 with open(credentials_file_path, "w") as f:
-                     f.write(google_credentials_json_content.replace("\\n", "\n"))
-                 print(f"{credentials_file_path} written directly from ENV (fallback).")
-            except Exception as e:
-                 print(f"Fatal Error writing {credentials_file_path} even with fallback: {e}")
-                 print("Exiting because credentials.json could not be created.")
-                 sys.exit(1) # Exit with error code
+            print("Exiting because credentials.json could not be created.")
+            sys.exit(1) # Exit with error code
     else:
         print(f"WARNING: Environment variable GOOGLE_CREDENTIALS_JSON not found and {credentials_file_path} does not exist.")
         print("Exiting because credentials.json is required for Google Sheets authorization.")
