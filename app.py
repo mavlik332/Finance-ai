@@ -18,19 +18,21 @@ load_dotenv()
 google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
 creds_data = None
 
-# --- DEBUG: Print raw ENV content (masked) ---
-# Masking more aggressively as full raw content might be very large
-print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV (first 200 chars): {google_credentials_json_content[:200] + '...' if google_credentials_json_content else 'Not set'}")
+# --- DEBUG: Print raw ENV content ---
+print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV (length: {len(google_credentials_json_content) if google_credentials_json_content else 0})\nStart (50 chars): '{(google_credentials_json_content[:50] + '...') if google_credentials_json_content else 'Not set'}'\nEnd (50 chars): '{(google_credentials_json_content[-50:] + '...') if google_credentials_json_content else 'Not set'}')")
 # --- END DEBUG ---
 
 if google_credentials_json_content:
     try:
-        # Замінюємо всі символи нового рядка на \n
-        cleaned_json_content = google_credentials_json_content.replace("\r\n", "\\n").replace("\n", "\\n")
+        # Видаляємо зайві пробіли та символи нового рядка на початку та в кінці
+        cleaned_json_content = google_credentials_json_content.strip()
+
+        # Замінюємо всі символи нового рядка всередині рядків на \n
+        # Робимо це після strip, щоб не додати \n знову, якщо були кінцеві нові рядки
+        cleaned_json_content = cleaned_json_content.replace("\r\n", "\\n").replace("\n", "\\n")
         
-        # --- DEBUG: Print cleaned content before parse (masked) ---
-        print(f"Cleaned GOOGLE_CREDENTIALS_JSON before parse (first 200 chars): {cleaned_json_content[:200] + '...' if cleaned_json_content else 'Empty'}")
-        print(f"Length of cleaned string: {len(cleaned_json_content) if cleaned_json_content else 0}")
+        # --- DEBUG: Print cleaned content before parse ---
+        print(f"Cleaned GOOGLE_CREDENTIALS_JSON before parse (length: {len(cleaned_json_content) if cleaned_json_content else 0})\nStart (50 chars): '{(cleaned_json_content[:50] + '...') if cleaned_json_content else 'Empty'}'\nEnd (50 chars): '{(cleaned_json_content[-50:] + '...') if cleaned_json_content else 'Empty'}')")
         # --- END DEBUG ---
 
         # Використовуємо json.loads з параметром strict=False для більш гнучкого парсингу
