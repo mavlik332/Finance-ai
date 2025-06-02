@@ -19,19 +19,42 @@ google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
 creds_data = None
 
 # --- DEBUG: Print raw ENV content (masked) ---
-print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV: {google_credentials_json_content[:100] + '...' if google_credentials_json_content else 'Not set'}")
+# Masking more aggressively as full raw content might be very large
+print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV (first 200 chars): {google_credentials_json_content[:200] + '...' if google_credentials_json_content else 'Not set'}")
 # --- END DEBUG ---
 
 if google_credentials_json_content:
     try:
-        # Замінюємо екранировані \n на реальні перенос
-        cleaned_json_content = google_credentials_json_content.replace("\\n", "\n")
-        # Очищаємо непотрібні керувальні символи, окрім нових рядків
-        cleaned_json_content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned_json_content)
+        # Більш агресивне очищення та нормалізація перед парсингом
+        # Замінюємо можливі \r\n на просто \n
+        cleaned_json_content = google_credentials_json_content.replace("\r\n", "\n")
+        # Замінюємо екрановані \\n на \n (якщо ENV був закодований таким чином)
+        cleaned_json_content = cleaned_json_content.replace("\\n", "\n")
+        # Видаляємо всі керуючі символи, окрім дозволених JSONом (	, 
+, 
+)
+        # JSON дозволяє , 	, 
+, , 
+        # Видаляємо символи з діапазону [\x00-\x1F] (контрольні символи ASCII), крім , 	, 
+, , 
+        # та символ DEL ()
+        cleaned_json_content = re.sub(r'[\x00-\x07\x0B\x0E-\x1F\x7F]', '', cleaned_json_content)
+
+        # --- DEBUG: Print cleaned content before parse (masked) ---
+        print(f"Cleaned GOOGLE_CREDENTIALS_JSON before parse (first 200 chars): {cleaned_json_content[:200] + '...' if cleaned_json_content else 'Empty'}")
+        print(f"Length of cleaned string: {len(cleaned_json_content) if cleaned_json_content else 0}")
+        # --- END DEBUG ---
+
         creds_data = json.loads(cleaned_json_content)
         print("Google credentials JSON успішно розібрано із змінної середовища.")
     except json.JSONDecodeError as e:
         print(f"Fatal Error: Не вдалося розпарсити GOOGLE_CREDENTIALS_JSON як JSON: {e}")
+        # Також надрукуємо частину проблемного рядка, якщо це можливо
+        if hasattr(e, 'pos') and cleaned_json_content:
+            start = max(0, e.pos - 50)
+            end = min(len(cleaned_json_content), e.pos + 50)
+            problem_snippet = cleaned_json_content[start:end]
+            print(f"Problematic snippet around error position ({e.pos}): '{problem_snippet}'")
         print("Перевірте, що змінна містить валідний JSON.")
         sys.exit(1)
     except Exception as e:
@@ -60,6 +83,9 @@ try:
     gc = gspread.service_account_from_dict(creds_data, scopes=SCOPE)
     print("Google Sheets авторизовано з JSON-даних.")
 except Exception:
+    # Цей блок, ймовірно, не буде досягнуто на Render, оскільки ми виходимо раніше
+    # якщо ENV змінна не парситься, або якщо її немає і немає локального файлу.
+    # Але залишаємо його для повноти, якщо код використовується локально без ENV.
     try:
         # Якщо раптом версія gspread не підтримує service_account_from_dict,
         # спробуємо звичайний метод, якщо credentials.json на диску
