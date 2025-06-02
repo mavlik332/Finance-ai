@@ -24,13 +24,16 @@ print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV (length: {len(google_credentials_js
 
 if google_credentials_json_content:
     try:
-        # Видаляємо зайві пробіли та символи нового рядка на початку та в кінці
-        cleaned_json_content = google_credentials_json_content.strip()
+        # Замінюємо всі символи нового рядка (\\r\\n та \\n) на екранований \\\\n
+        cleaned_json_content = google_credentials_json_content.replace("\\r\\n", "\\\\n").replace("\\n", "\\\\n")
 
-        # Замінюємо всі символи нового рядка всередині рядків на \n
-        # Робимо це після strip, щоб не додати \n знову, якщо були кінцеві нові рядки
-        cleaned_json_content = cleaned_json_content.replace("\r\n", "\\n").replace("\n", "\\n")
-        
+        # Видаляємо потенційні зайві пробіли та символи нового рядка на початку/кінці після заміни
+        cleaned_json_content = cleaned_json_content.strip()
+
+        # Якщо рядок тепер починається з "{"+"\\\\n", видаляємо "\\\\n"
+        if cleaned_json_content.startswith("{\\\\\\n"):
+             cleaned_json_content = "{" + cleaned_json_content[3:] # Пропускаємо { та \\n
+
         # --- DEBUG: Print cleaned content before parse ---
         print(f"Cleaned GOOGLE_CREDENTIALS_JSON before parse (length: {len(cleaned_json_content) if cleaned_json_content else 0})\nStart (50 chars): '{(cleaned_json_content[:50] + '...') if cleaned_json_content else 'Empty'}'\nEnd (50 chars): '{(cleaned_json_content[-50:] + '...') if cleaned_json_content else 'Empty'}')")
         # --- END DEBUG ---
