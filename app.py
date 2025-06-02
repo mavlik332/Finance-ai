@@ -16,30 +16,43 @@ import requests # Add import for making HTTP requests
 
 load_dotenv()
 
-# --- Google Credentials Setup ---
-# This section handles credentials.json for deployment environments
+# --- Google Credentials Setup for Deployment ---
+# This section handles credentials.json for deployment environments.
 # On platforms like Render, we pass the JSON content via an environment variable
-# and write it to a file during startup.
-google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
+# and write it to a file during startup if it doesn't exist locally.
 credentials_file_path = "credentials.json"
+google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
-if google_credentials_json_content:
-    print(f"GOOGLE_CREDENTIALS_JSON environment variable found. Writing to {credentials_file_path}")
-    try:
-        with open(credentials_file_path, "w") as f:
-            json.dump(json.loads(google_credentials_json_content), f, indent=None) # Use indent=None to save space
-        print(f"{credentials_file_path} created successfully.")
-    except Exception as e:
-        print(f"Error writing {credentials_file_path}: {e}")
-        # Depending on strictness, you might want to sys.exit(1) here
+if not os.path.exists(credentials_file_path):
+    if google_credentials_json_content:
+        print(f"GOOGLE_CREDENTIALS_JSON environment variable found. Writing to {credentials_file_path}")
+        try:
+            # Try to load and dump to ensure correct formatting (handle escaped newlines)
+            cred_data = json.loads(google_credentials_json_content.replace("\\n", "\n"))
+            with open(credentials_file_path, "w") as f:
+                json.dump(cred_data, f, indent=None) # Use indent=None to save space
+            print(f"{credentials_file_path} created successfully from ENV.")
+        except Exception as e:
+            print(f"Error writing {credentials_file_path} from ENV: {e}")
+            # Fallback to writing directly, replacing escaped newlines
+            try:
+                 with open(credentials_file_path, "w") as f:
+                     f.write(google_credentials_json_content.replace("\\n", "\n"))
+                 print(f"{credentials_file_path} written directly from ENV (fallback).")
+            except Exception as e:
+                 print(f"Fatal Error writing {credentials_file_path} even with fallback: {e}")
+                 # Depending on strictness, you might want to sys.exit(1) here
+    else:
+        print(f"WARNING: Environment variable GOOGLE_CREDENTIALS_JSON not found and {credentials_file_path} does not exist. Google Sheets authorization may fail.")
 else:
-    print("GOOGLE_CREDENTIALS_JSON not found. Assuming credentials.json exists locally or using other method.")
+    print(f"{credentials_file_path} found locally. Using existing file.")
 # --- End Google Credentials Setup ---
 
 # Debug prints
 print("Environment variables:")
 print(f"OPENAI_API_KEY: {'*' * len(os.getenv('OPENAI_API_KEY', '')) if os.getenv('OPENAI_API_KEY') else 'Not set'}")
 print(f"SHEET_ID: {os.getenv('SHEET_ID', 'Not set')}")
+print(f"GOOGLE_CREDENTIALS_JSON: {'*' * len(google_credentials_json_content) if google_credentials_json_content else 'Not set'}") # Add debug print for GOOGLE_CREDENTIALS_JSON
 
 # OpenAI Configuration
 # Initialize the OpenAI client with the new API interface
@@ -54,7 +67,7 @@ SCOPE = [
     "https://www.googleapis.com/auth/drive"
 ]
 creds = ServiceAccountCredentials.from_json_keyfile_name(
-    "credentials.json", SCOPE
+    credentials_file_path, SCOPE # Use the variable path
 )
 gc = gspread.authorize(creds)
 sheet = gc.open_by_key(os.getenv("SHEET_ID")).sheet1
@@ -143,13 +156,13 @@ def process_transaction(text: str) -> dict:
             response_format={ "type": "json_object" }
         )
         content_details = response_details.choices[0].message.content.strip()
-        print(f"Raw response from GPT details call: {content_details}")
+        print(f'Raw response from GPT details call: {content_details}')
 
         try:
             details_data = json.loads(content_details)
-            print(f"Parsed details data: {details_data}")
+            print(f'Parsed details data: {details_data}')
         except json.JSONDecodeError:
-            print(f"JSON Decode Error on GPT details call: {content_details}")
+            print(f'JSON Decode Error on GPT details call: {content_details}')
             # If parsing fails, return minimal data and indicate error
             return {
                 "type": transaction_type, # Return classified type even if parsing failed
@@ -171,24 +184,24 @@ def process_transaction(text: str) -> dict:
              category_or_source = details_data.get("source")
              description = None # No description for income in prompt/sheet
 
-        print(f"Extracted - Amount: {amount}, Original Currency: {original_currency}, Category/Source: {category_or_source}, Description: {description}")
+        print(f'Extracted - Amount: {amount}, Original Currency: {original_currency}, Category/Source: {category_or_source}, Description: {description}')
 
         # Step 3: Convert amount to PLN using ExchangeRate-API if needed
         converted_amount = amount # Start with original amount
         final_currency = original_currency # Start with original currency
 
         if amount is None or not isinstance(amount, (int, float)) or float(amount) <= 0:
-             print(f"Warning: Amount not found, invalid, or non-positive ({amount}). Skipping currency conversion.")
+             print(f'Warning: Amount not found, invalid, or non-positive ({amount}). Skipping currency conversion.')
              # converted_amount and final_currency remain original or default
         elif final_currency != "PLN":
-            print(f"Attempting to get exchange rate for {final_currency} to PLN using ExchangeRate-API...")
+            print(f'Attempting to get exchange rate for {final_currency} to PLN using ExchangeRate-API...')
             api_key = os.getenv("EXCHANGERATE_API_KEY")
             if not api_key:
                 print("Error: EXCHANGERATE_API_KEY not set in .env file. Cannot perform currency conversion.")
                 # Keep original amount and currency
             else:
                 # Construct the API URL
-                api_url = f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{final_currency}"
+                api_url = f'https://v6.exchangerate-api.com/v6/{api_key}/latest/{final_currency}'
                 try:
                     response = requests.get(api_url)
                     response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
@@ -198,28 +211,27 @@ def process_transaction(text: str) -> dict:
                         rates = data["conversion_rates"]
                         if "PLN" in rates:
                             rate = rates["PLN"]
-                            print(f"Rate from ExchangeRate-API ({final_currency} to PLN): {rate}")
+                            print(f'Rate from ExchangeRate-API ({final_currency} to PLN): {rate}')
 
                             if rate is not None and rate > 0:
                                  converted_amount = round(float(amount) * rate, 2) # Convert and round
                                  final_currency = "PLN" # Set currency to PLN after successful conversion
-                                 print(f"Successfully converted to {converted_amount} PLN using ExchangeRate-API rate.")
+                                 print(f'Successfully converted to {converted_amount} PLN using ExchangeRate-API rate.')
                             else:
-                                 print(f"Warning: Received non-positive or None rate {rate} from ExchangeRate-API for {final_currency}. Keeping original amount and currency.")
+                                 print(f'Warning: Received non-positive or None rate {rate} from ExchangeRate-API for {final_currency}. Keeping original amount and currency.')
                         else:
-                            print(f"Error: PLN not found in conversion rates from ExchangeRate-API for {final_currency}. Keeping original amount and currency.")
-                            print(f"Available rates: {list(rates.keys())}") # Log available currencies for debugging
+                            print(f'Error: PLN not found in conversion rates from ExchangeRate-API for {final_currency}. Keeping original amount and currency.')
+                            print(f'Available rates: {list(rates.keys())}') # Log available currencies for debugging
 
                     else:
-                        # Use single quotes for the outer f-string
                         print(f'Error from ExchangeRate-API: {data.get("error-type", "Unknown error")}. Keeping original amount and currency.')
                         # Keep original amount and currency
 
                 except requests.exceptions.RequestException as e:
-                    print(f"Network or API request error getting exchange rate from ExchangeRate-API for {final_currency}: {e}. Keeping original amount and currency.")
+                    print(f'Network or API request error getting exchange rate from ExchangeRate-API for {final_currency}: {e}. Keeping original amount and currency.')
                     # Keep original amount and currency
                 except Exception as e: # Catch any other unexpected error during API call or processing
-                    print(f"Unexpected error processing ExchangeRate-API response for {final_currency}: {e}. Keeping original amount and currency.")
+                    print(f'Unexpected error processing ExchangeRate-API response for {final_currency}: {e}. Keeping original amount and currency.')
                     # Keep original amount and currency
         else:
              print("Currency is already PLN, no conversion needed.")
@@ -236,12 +248,11 @@ def process_transaction(text: str) -> dict:
             "description": description # Only for expense
         }
 
-        print(f"Final processed transaction data: {result}")
+        print(f'Final processed transaction data: {result}')
         return result
 
     except Exception as e:
-        # This catches errors from the initial GPT calls themselves or other unexpected issues
-        print(f"Error during transaction processing: {str(e)}")
+        print(f'Error during transaction processing: {str(e)}')
         # Return error state
         return {
              "type": "error",
