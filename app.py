@@ -32,24 +32,47 @@ if not os.path.exists(credentials_file_path):
             cleaned_json = google_credentials_json_content.replace("\\n", "\n")
             # Remove any control characters except newlines
             cleaned_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned_json)
-            
+
             # Try to parse and validate the JSON
             try:
                 cred_data = json.loads(cleaned_json)
                 # Write the validated JSON
                 with open(credentials_file_path, "w", encoding='utf-8') as f:
                     json.dump(cred_data, f, indent=None, ensure_ascii=False)
-                print(f"{credentials_file_path} created successfully from ENV.")
+                print(f"{credentials_file_path} created successfully from ENV by validation.")
             except json.JSONDecodeError as je:
-                print(f"JSON validation failed: {je}")
+                print(f"JSON validation failed before writing file: {je}")
                 # If JSON validation fails, try to write the cleaned string directly
-                with open(credentials_file_path, "w", encoding='utf-8') as f:
-                    f.write(cleaned_json)
-                print(f"{credentials_file_path} written directly (JSON validation failed).")
+                try:
+                    with open(credentials_file_path, "w", encoding='utf-8') as f:
+                        f.write(cleaned_json)
+                    print(f"{credentials_file_path} written directly (JSON validation failed before write).")
+                except Exception as file_write_e:
+                    print(f"Error writing {credentials_file_path} directly after JSON validation failure: {file_write_e}")
+                    print("Exiting because credentials.json could not be created.")
+                    sys.exit(1) # Exit with error code
         except Exception as e:
-            print(f"Error writing {credentials_file_path} from ENV: {e}")
+            print(f"Error during initial writing process for {credentials_file_path} from ENV: {e}")
             print("Exiting because credentials.json could not be created.")
             sys.exit(1) # Exit with error code
+
+        # --- Debugging: Read the file back immediately after writing ---
+        if os.path.exists(credentials_file_path):
+            try:
+                with open(credentials_file_path, "r", encoding='utf-8') as f:
+                    file_content_after_write = f.read()
+                print(f"Content of {credentials_file_path} immediately after writing: {file_content_after_write}")
+                # Optional: Try parsing the file content here to see if it works now
+                try:
+                    json.loads(file_content_after_write)
+                    print(f"Content of {credentials_file_path} successfully parsed after writing.")
+                except json.JSONDecodeError as final_je:
+                    print(f"JSON decode failed immediately after writing file: {final_je}")
+
+            except Exception as read_e:
+                print(f"Error reading {credentials_file_path} immediately after writing: {read_e}")
+        # --- End Debugging ---
+
     else:
         print(f"WARNING: Environment variable GOOGLE_CREDENTIALS_JSON not found and {credentials_file_path} does not exist.")
         print("Exiting because credentials.json is required for Google Sheets authorization.")
@@ -62,7 +85,8 @@ else:
 print("Environment variables:")
 print(f"OPENAI_API_KEY: {'*' * len(os.getenv('OPENAI_API_KEY', '')) if os.getenv('OPENAI_API_KEY') else 'Not set'}")
 print(f"SHEET_ID: {os.getenv('SHEET_ID', 'Not set')}")
-print(f"GOOGLE_CREDENTIALS_JSON: {'*' * len(google_credentials_json_content) if google_credentials_json_content else 'Not set'}") # Add debug print for GOOGLE_CREDENTIALS_JSON
+# Mask the full JSON content in logs for security
+print(f"GOOGLE_CREDENTIALS_JSON: {'*' * min(len(google_credentials_json_content), 50) if google_credentials_json_content else 'Not set'}...") # Mask content
 
 # OpenAI Configuration
 # Initialize the OpenAI client with the new API interface
