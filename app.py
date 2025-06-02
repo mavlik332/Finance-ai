@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 import openai
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+# from oauth2client.service_account import ServiceAccountCredentials # Remove old import
 from dotenv import load_dotenv
 import httpx
 import re # Import the regular expression module
@@ -17,68 +17,36 @@ import requests # Add import for making HTTP requests
 
 load_dotenv()
 
-# --- Google Credentials Setup for Deployment ---
-# This section handles credentials.json for deployment environments.
-# On platforms like Render, we pass the JSON content via an environment variable
-# and write it to a file during startup if it doesn't exist locally.
-credentials_file_path = "credentials.json"
+# --- Google Credentials Setup from ENV --- # Updated section title
+# This section handles credentials using JSON content directly from an environment variable.
+# This avoids writing to a file, which can be problematic on some platforms.
+
 google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
-if not os.path.exists(credentials_file_path):
-    if google_credentials_json_content:
-        print(f"GOOGLE_CREDENTIALS_JSON environment variable found. Writing to {credentials_file_path}")
-        try:
-            # First, try to clean the JSON string
-            cleaned_json = google_credentials_json_content.replace("\\n", "\n")
-            # Remove any control characters except newlines
-            cleaned_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned_json)
+if not google_credentials_json_content:
+    print("Error: Environment variable GOOGLE_CREDENTIALS_JSON is not set.")
+    print("Please set this variable with the content of your credentials.json file (as a single-line string with escaped newlines).")
+    sys.exit(1) # Exit if credentials JSON is not provided
 
-            # Try to parse and validate the JSON
-            try:
-                cred_data = json.loads(cleaned_json)
-                # Write the validated JSON
-                with open(credentials_file_path, "w", encoding='utf-8') as f:
-                    json.dump(cred_data, f, indent=None, ensure_ascii=False)
-                print(f"{credentials_file_path} created successfully from ENV by validation.")
-            except json.JSONDecodeError as je:
-                print(f"JSON validation failed before writing file: {je}")
-                # If JSON validation fails, try to write the cleaned string directly
-                try:
-                    with open(credentials_file_path, "w", encoding='utf-8') as f:
-                        f.write(cleaned_json)
-                    print(f"{credentials_file_path} written directly (JSON validation failed before write).")
-                except Exception as file_write_e:
-                    print(f"Error writing {credentials_file_path} directly after JSON validation failure: {file_write_e}")
-                    print("Exiting because credentials.json could not be created.")
-                    sys.exit(1) # Exit with error code
-        except Exception as e:
-            print(f"Error during initial writing process for {credentials_file_path} from ENV: {e}")
-            print("Exiting because credentials.json could not be created.")
-            sys.exit(1) # Exit with error code
+creds_data = None
+try:
+    # Attempt to parse the JSON content directly from the environment variable string
+    # Handle potential escaped newlines if the user provided it in that format
+    cleaned_json_content = google_credentials_json_content.replace("\\n", "\n")
+    # Remove any control characters except newlines (as a precaution, though may not be needed now)
+    cleaned_json_content = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned_json_content)
 
-        # --- Debugging: Read the file back immediately after writing ---
-        if os.path.exists(credentials_file_path):
-            try:
-                with open(credentials_file_path, "r", encoding='utf-8') as f:
-                    file_content_after_write = f.read()
-                print(f"Content of {credentials_file_path} immediately after writing: {file_content_after_write}")
-                # Optional: Try parsing the file content here to see if it works now
-                try:
-                    json.loads(file_content_after_write)
-                    print(f"Content of {credentials_file_path} successfully parsed after writing.")
-                except json.JSONDecodeError as final_je:
-                    print(f"JSON decode failed immediately after writing file: {final_je}")
+    creds_data = json.loads(cleaned_json_content)
+    print("Google credentials JSON successfully parsed from environment variable.")
 
-            except Exception as read_e:
-                print(f"Error reading {credentials_file_path} immediately after writing: {read_e}")
-        # --- End Debugging ---
+except json.JSONDecodeError as e:
+    print(f"Fatal Error: Could not parse GOOGLE_CREDENTIALS_JSON environment variable as JSON: {e}")
+    print("Please ensure the variable contains valid JSON content.")
+    sys.exit(1) # Exit if JSON is invalid
+except Exception as e:
+    print(f"An unexpected error occurred while processing GOOGLE_CREDENTIALS_JSON: {e}")
+    sys.exit(1)
 
-    else:
-        print(f"WARNING: Environment variable GOOGLE_CREDENTIALS_JSON not found and {credentials_file_path} does not exist.")
-        print("Exiting because credentials.json is required for Google Sheets authorization.")
-        sys.exit(1) # Exit with error code
-else:
-    print(f"{credentials_file_path} found locally. Using existing file.")
 # --- End Google Credentials Setup ---
 
 # Debug prints
@@ -100,11 +68,29 @@ SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
-creds = ServiceAccountCredentials.from_json_keyfile_name(
-    credentials_file_path, SCOPE # Use the variable path
-)
-gc = gspread.authorize(creds)
-sheet = gc.open_by_key(os.getenv("SHEET_ID")).sheet1
+
+# Use gspread.service_account_from_dict to authorize directly from parsed JSON data
+try:
+    # Note: gspread v5+ uses google.oauth2.service_account.Credentials
+    # which from_dict() expects. oauth2client is older but might still work
+    # if gspread internally handles it. Let's try directly.
+    # If using newer gspread, might need `from google.oauth2 import service_account`
+    # and `service_account.Credentials.from_service_account_info(creds_data, scopes=SCOPE)`
+    # For now, assume gspread handles older format via from_dict if needed.
+    gc = gspread.service_account_from_dict(creds_data, scopes=SCOPE)
+    print("Google Sheets authorized successfully from JSON data.")
+except Exception as e:
+    print(f"Fatal Error: Could not authorize Google Sheets from JSON data: {e}")
+    print("Please check your GOOGLE_CREDENTIALS_JSON content.")
+    sys.exit(1) # Exit if authorization fails
+
+try:
+    sheet = gc.open_by_key(os.getenv("SHEET_ID")).sheet1
+    print(f"Successfully opened Google Sheet with ID: {os.getenv('SHEET_ID')}")
+except Exception as e:
+    print(f"Fatal Error: Could not open Google Sheet with ID {os.getenv('SHEET_ID', 'Not set')}: {e}")
+    print("Please ensure SHEET_ID is correct and the service account has access.")
+    sys.exit(1) # Exit if sheet cannot be opened
 
 # Flask Initialization
 app = Flask(__name__)
