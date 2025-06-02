@@ -18,6 +18,10 @@ load_dotenv()
 google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
 creds_data = None
 
+# --- DEBUG: Print raw ENV content (masked) ---
+print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV: {google_credentials_json_content[:100] + '...' if google_credentials_json_content else 'Not set'}")
+# --- END DEBUG ---
+
 if google_credentials_json_content:
     try:
         # Замінюємо екранировані \n на реальні перенос
@@ -142,7 +146,7 @@ def process_transaction(text: str) -> dict:
             "  – «кіно», «театр», «концерт\", «відеогра\", «бар\" → «розваги».\n"
             "  – Інакше → «інше».\n\n"
             "Поле \"description\" — короткий опис: «обід у кафе», «хот-дог біля офісу» і т.д.\n\n"
-            f"Фраза: '{text}'"
+            f"Phrase: '{text}'"
         )
     else:
         prompt_details = (
