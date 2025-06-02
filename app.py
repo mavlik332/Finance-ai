@@ -30,14 +30,10 @@ if google_credentials_json_content:
         cleaned_json_content = google_credentials_json_content.replace("\r\n", "\n")
         # Замінюємо екрановані \\n на \n (якщо ENV був закодований таким чином)
         cleaned_json_content = cleaned_json_content.replace("\\n", "\n")
-        # Видаляємо всі керуючі символи, окрім дозволених JSONом (	, 
-, 
-)
-        # JSON дозволяє , 	, 
-, , 
-        # Видаляємо символи з діапазону [\x00-\x1F] (контрольні символи ASCII), крім , 	, 
-, , 
-        # та символ DEL ()
+        # Видаляємо всі керуючі символи, окрім дозволених JSONом (tab, newline, carriage return)
+        # JSON дозволяє backspace, tab, newline, form feed
+        # Видаляємо символи з діапазону [\x00-\x1F] (контрольні символи ASCII), крім backspace, tab, newline, form feed
+        # та символ DEL
         cleaned_json_content = re.sub(r'[\x00-\x07\x0B\x0E-\x1F\x7F]', '', cleaned_json_content)
 
         # --- DEBUG: Print cleaned content before parse (masked) ---
