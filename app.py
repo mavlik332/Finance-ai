@@ -9,6 +9,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 import httpx
 import requests
+import base64
 
 # Завантажуємо локальні .env (якщо є)
 load_dotenv()
@@ -17,29 +18,38 @@ load_dotenv()
 # 1) Підготовка Google-сервісних облікових даних
 # -----------------------------------------------------------------------------
 
-google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
+# Зчитуємо закодовані в Base64 облікові дані з ENV
+google_credentials_base64 = os.getenv("GOOGLE_CREDENTIALS_BASE64")
 
-if google_credentials_json_content:
-    # Якщо передано через ENV – записуємо цей текст у файл credentials.json
+if google_credentials_base64:
+    # Якщо дані є в ENV (Base64) – декодуємо та записуємо у файл credentials.json
     try:
-        # Заміна символів "\\n" у рядку на реальні переноски рядків
-        cleaned = google_credentials_json_content.replace("\\n", "\n")
-        # Додатково прибираємо невидимі керувальні символи (окрім \n)
-        cleaned = ''.join(ch for ch in cleaned if (ch == '\n' or ord(ch) >= 32))
+        # Декодування Base64
+        decoded_json_bytes = base64.b64decode(google_credentials_base64)
+        decoded_json_content = decoded_json_bytes.decode('utf-8')
+
+        # Перевірка, чи декодований вміст схожий на JSON
+        try:
+            json.loads(decoded_json_content) # Спроба розпарсити для валідації
+            print("Base64 декодовано успішно, вміст схожий на валідний JSON.")
+        except json.JSONDecodeError:
+            print("Warning: Base64 декодовано, але вміст не є ідеальним JSON. Спроба зберегти як є.")
+            # Продовжуємо запис навіть якщо не ідеальний JSON, можливо, ServiceAccountCredentials впорається
+
         # Пишемо у credentials.json
         with open("credentials.json", "w", encoding="utf-8") as f:
-            f.write(cleaned)
-        print("Google credentials JSON записано у credentials.json з ENV.")
+            f.write(decoded_json_content)
+        print("Google credentials JSON записано у credentials.json з декодованого Base64 ENV.")
     except Exception as e:
-        print(f"Fatal Error: не вдалося записати GOOGLE_CREDENTIALS_JSON у файл: {e}")
+        print(f"Fatal Error: не вдалося декодувати GOOGLE_CREDENTIALS_BASE64 або записати файл: {e}")
         sys.exit(1)
 
 elif os.path.exists("credentials.json"):
-    # Якщо ж локально є credentials.json – просто повідомляємо
+    # Якщо ж локально є credentials.json і ENV не задано – просто повідомляємо
     print("Google credentials JSON завантажено з локального credentials.json.")
 else:
     print("Error: не знайдено жодного способу отримати credentials.json.")
-    print("Встановіть змінну окруження GOOGLE_CREDENTIALS_JSON або додайте локальний файл credentials.json у корінь проєкту.")
+    print("Встановіть змінну окруження GOOGLE_CREDENTIALS_BASE64 або додайте локальний файл credentials.json у корінь проєкту.")
     sys.exit(1)
 
 # Тепер, коли credentials.json гарантовано є (він або створений із ENV, або лежав локально),
@@ -90,7 +100,7 @@ app = Flask(__name__)
 
 def process_transaction(text: str) -> dict:
     """
-    Визначає “expense” чи “income”, парсить JSON через GPT, конвертує валюту,
+    Визначає "expense" чи "income", парсить JSON через GPT, конвертує валюту,
     і повертає словник із деталями транзакції.
     """
     print(f"Received text for processing: {text}")
@@ -123,8 +133,8 @@ def process_transaction(text: str) -> dict:
             "Ви — бот-помічник для українських фінансових витрат. "
             "Поверніть ЛИШЕ JSON за схемою:\n"
             "{\n"
-            "  \"amount\": <число (int/float)>\,\n"
-            "  \"currency\": \"<код_валюти (наприклад, USD, UAH, EUR, PLN)>\",\n"
+            "  \"amount\": <число (int/float)>,\n"
+            "  \"currency\": \"<код_валюти (наприклад, USD, UAH, EUR, PLN)>,\n"
             "  \"category\": \"<категорія>\",\n"
             "  \"description\": \"<короткий опис>\"\n"
             "}\n\n"
@@ -137,14 +147,14 @@ def process_transaction(text: str) -> dict:
             "  • \"купив\", \"ремонт\", \"квитки\" → \"покупки\"\n"
             "  • \"кіно\", \"театр\", \"концерт\", \"відеогра\", \"бар\" → \"розваги\"\n"
             "  • Інакше → \"інше\"\n\n"
-            f"Фраза: '{text}'"
+            f"Phrase: '{text}'"
         )
     else:
         prompt_details = (
             "You are an assistant for parsing financial income in Ukrainian.\n"
             "Return ONLY JSON with fields:\n"
             "{\n"
-            "  \"amount\": <number>\,\n"
+            "  \"amount\": <number>,\n"
             "  \"currency\": \"<USD, UAH, EUR, PLN>\",\n"
             "  \"source\": \"<source_of_income>\"\n"
             "}\n\n"
