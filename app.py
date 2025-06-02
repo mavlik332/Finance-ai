@@ -1,6 +1,6 @@
 import os
+import sys
 import json
-import sys  # для sys.exit
 from datetime import datetime
 from flask import Flask, request, jsonify
 import openai
@@ -8,126 +8,97 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 import httpx
-import re  # для очищення рядків із новими рядками
 import requests
 
+# Завантажуємо локальні .env (якщо є)
 load_dotenv()
 
-# --- Google Credentials Setup (ENV або локальний файл) ---
-# Якщо є змінна GOOGLE_CREDENTIALS_JSON, беремо її. Інакше перевіряємо, чи лежить credentials.json на диску.
-google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
-creds_data = None
+# -----------------------------------------------------------------------------
+# 1) Підготовка Google-сервісних облікових даних
+# -----------------------------------------------------------------------------
 
-# --- DEBUG: Print raw ENV content ---
-print(f"Raw GOOGLE_CREDENTIALS_JSON from ENV (length: {len(google_credentials_json_content) if google_credentials_json_content else 0})\nStart (50 chars): '{(google_credentials_json_content[:50] + '...') if google_credentials_json_content else 'Not set'}'\nEnd (50 chars): '{(google_credentials_json_content[-50:] + '...') if google_credentials_json_content else 'Not set'}')")
-# --- END DEBUG ---
+google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
 if google_credentials_json_content:
+    # Якщо передано через ENV – записуємо цей текст у файл credentials.json
     try:
-        # Замінюємо всі символи нового рядка (\\r\\n та \\n) на екранований \\\\n
-        cleaned_json_content = google_credentials_json_content.replace("\\r\\n", "\\\\n").replace("\\n", "\\\\n")
-
-        # Видаляємо потенційні зайві пробіли та символи нового рядка на початку/кінці після заміни
-        cleaned_json_content = cleaned_json_content.strip()
-
-        # Якщо рядок тепер починається з "{"+"\\\\n", видаляємо "\\\\n"
-        if cleaned_json_content.startswith("{\\\\\\n"):
-             cleaned_json_content = "{" + cleaned_json_content[3:] # Пропускаємо { та \\n
-
-        # --- DEBUG: Print cleaned content before parse ---
-        print(f"Cleaned GOOGLE_CREDENTIALS_JSON before parse (length: {len(cleaned_json_content) if cleaned_json_content else 0})\nStart (50 chars): '{(cleaned_json_content[:50] + '...') if cleaned_json_content else 'Empty'}'\nEnd (50 chars): '{(cleaned_json_content[-50:] + '...') if cleaned_json_content else 'Empty'}')")
-        # --- END DEBUG ---
-
-        # Використовуємо json.loads з параметром strict=False для більш гнучкого парсингу
-        creds_data = json.loads(cleaned_json_content, strict=False)
-        print("Google credentials JSON успішно розібрано із змінної середовища.")
-    except json.JSONDecodeError as e:
-        print(f"Fatal Error: Не вдалося розпарсити GOOGLE_CREDENTIALS_JSON як JSON: {e}")
-        # Також надрукуємо частину проблемного рядка, якщо це можливо
-        if hasattr(e, 'pos') and cleaned_json_content:
-            start = max(0, e.pos - 50)
-            end = min(len(cleaned_json_content), e.pos + 50)
-            problem_snippet = cleaned_json_content[start:end]
-            print(f"Problematic snippet around error position ({e.pos}): '{problem_snippet}'")
-        print("Перевірте, що змінна містить валідний JSON.")
-        sys.exit(1)
+        # Заміна символів "\\n" у рядку на реальні переноски рядків
+        cleaned = google_credentials_json_content.replace("\\n", "\n")
+        # Додатково прибираємо невидимі керувальні символи (окрім \n)
+        cleaned = ''.join(ch for ch in cleaned if (ch == '\n' or ord(ch) >= 32))
+        # Пишемо у credentials.json
+        with open("credentials.json", "w", encoding="utf-8") as f:
+            f.write(cleaned)
+        print("Google credentials JSON записано у credentials.json з ENV.")
     except Exception as e:
-        print(f"Unexpected error while processing GOOGLE_CREDENTIALS_JSON: {e}")
+        print(f"Fatal Error: не вдалося записати GOOGLE_CREDENTIALS_JSON у файл: {e}")
         sys.exit(1)
 
 elif os.path.exists("credentials.json"):
-    try:
-        creds_data = json.load(open("credentials.json", "r", encoding="utf-8"))
-        print("Google credentials JSON завантажено з локального credentials.json.")
-    except Exception as e:
-        print(f"Fatal Error: Не вдалося прочитати локальний credentials.json: {e}")
-        sys.exit(1)
-
+    # Якщо ж локально є credentials.json – просто повідомляємо
+    print("Google credentials JSON завантажено з локального credentials.json.")
 else:
-    print("Error: Не знайдено облікових даних Google. Встановіть GOOGLE_CREDENTIALS_JSON або додайте credentials.json.")
+    print("Error: не знайдено жодного способу отримати credentials.json.")
+    print("Встановіть змінну окруження GOOGLE_CREDENTIALS_JSON або додайте локальний файл credentials.json у корінь проєкту.")
     sys.exit(1)
 
-# Авторизація в Google Sheets
+# Тепер, коли credentials.json гарантовано є (він або створений із ENV, або лежав локально),
+# авторизуємося через oauth2client
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
 try:
-    # Спроба авторизації прямим методом через dict
-    gc = gspread.service_account_from_dict(creds_data, scopes=SCOPE)
-    print("Google Sheets авторизовано з JSON-даних.")
+    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", SCOPE)
+    gc = gspread.authorize(creds)
+    print("Google Sheets авторизовано через credentials.json.")
 except Exception as e:
-    # Логуємо помилку для діагностики
-    print(f"Error using gspread.service_account_from_dict: {e}")
-    # Цей блок, ймовірно, не буде досягнуто на Render, оскільки ми виходимо раніше
-    # якщо ENV змінна не парситься, або якщо її немає і немає локального файлу.
-    # Але залишаємо його для повноти, якщо код використовується локально без ENV.
-    try:
-        # Якщо раптом версія gspread не підтримує service_account_from_dict,
-        # спробуємо звичайний метод, якщо credentials.json на диску
-        # Потрібно переконатись, що credentials.json існує, якщо ми тут
-        if os.path.exists("credentials.json"):
-            gc = gspread.service_account()
-            print("Google Sheets авторизовано через локальний credentials.json.")
-        else:
-            # Якщо service_account_from_dict не спрацював і локального файлу немає
-            print("Fatal Error: gspread.service_account_from_dict failed and credentials.json not found for fallback.")
-            sys.exit(1)
+    print(f"Fatal Error: не вдалося авторизувати Google Sheets: {e}")
+    sys.exit(1)
 
-    except Exception as e:
-        print(f"Fatal Error: Не вдалося авторизувати Google Sheets: {e}")
-        sys.exit(1)
+# Далі відкриваємо потрібний лист
+sheet_id = os.getenv("SHEET_ID")
+if not sheet_id:
+    print("Fatal Error: змінна SHEET_ID не встановлена.")
+    sys.exit(1)
 
 try:
-    sheet = gc.open_by_key(os.getenv("SHEET_ID")).sheet1
-    print(f"Успішно відкрито Google Sheet з ID: {os.getenv('SHEET_ID')}")
+    sheet = gc.open_by_key(sheet_id).sheet1
+    print(f"Успішно відкрито Google Sheet з ID {sheet_id}.")
 except Exception as e:
-    print(f"Fatal Error: Не вдалося відкрити Google Sheet з ID {os.getenv('SHEET_ID', 'Not set')}: {e}")
-    print("Перевірте, чи SHEET_ID правильний і чи сервіс-акаунт має доступ.")
+    print(f"Fatal Error: не вдалося відкрити Google Sheet з ID {sheet_id}: {e}")
     sys.exit(1)
-# --- Кінець секції авторизації Google Sheets ---
 
-# Діагностичний вивід
+# -----------------------------------------------------------------------------
+# 2) Налаштування OpenAI
+# -----------------------------------------------------------------------------
+
 print("Environment variables:")
-print(f"OPENAI_API_KEY: {'*' * len(os.getenv('OPENAI_API_KEY', '')) if os.getenv('OPENAI_API_KEY') else 'Not set'}")
-print(f"SHEET_ID: {os.getenv('SHEET_ID', 'Not set')}")
-print(f"Google Credentials: {'set' if creds_data else 'not set'}")
+print(f"  OPENAI_API_KEY: {'*' * len(os.getenv('OPENAI_API_KEY', '')) if os.getenv('OPENAI_API_KEY') else 'Not set'}")
+print(f"  SHEET_ID: {sheet_id}")
+print(f"  Google Credentials file: {'exists' if os.path.exists('credentials.json') else 'not found'}")
 
-# OpenAI конфігурація
 http_client = httpx.Client(trust_env=False)
 client = openai.OpenAI(http_client=http_client)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Ініціалізація Flask
+# -----------------------------------------------------------------------------
+# 3) Ініціалізація Flask
+# -----------------------------------------------------------------------------
+
 app = Flask(__name__)
 
 def process_transaction(text: str) -> dict:
+    """
+    Визначає “expense” чи “income”, парсить JSON через GPT, конвертує валюту,
+    і повертає словник із деталями транзакції.
+    """
     print(f"Received text for processing: {text}")
 
-    # 1) Визначаємо тип транзакції: expense чи income
+    # 1. Класифікація (expense/income)
     prompt_classify = (
-        "Analyze the following phrase and determine if it describes an 'expense' or 'income'. "
-        "Respond with ONLY the word 'expense' or 'income'. "
+        "Analyze the following phrase and determine if it describes an 'expense' or 'income'.\n"
+        "Respond with ONLY the word 'expense' or 'income'.\n\n"
         f"Phrase: '{text}'"
     )
     try:
@@ -139,43 +110,44 @@ def process_transaction(text: str) -> dict:
         )
         transaction_type = response_classify.choices[0].message.content.strip().lower()
         if transaction_type not in ['expense', 'income']:
-            print(f"Warning: GPT returned unexpected transaction type: {transaction_type}. Defaulting to expense.")
+            print(f"Warning: Unexpected type '{transaction_type}', defaulting to 'expense'.")
             transaction_type = 'expense'
         print(f"Classified as: {transaction_type}")
     except Exception as e:
-        print(f"Error classifying transaction type: {e}. Defaulting to expense.")
+        print(f"Error classifying transaction type: {e}. Defaulting to 'expense'.")
         transaction_type = 'expense'
 
-    # 2) Формуємо prompt для деталей
+    # 2. Парсинг деталей через GPT
     if transaction_type == 'expense':
         prompt_details = (
-            "Ви — інтелектуальний помічник для парсингу фінансових витрат українською. "
-            "Поверніть ЛИШЕ JSON (без зайвого тексту).\n\n"
-            "Очікуваний JSON з полями:\n"
-            "  {\n"
-            "    \"amount\": <число (int або float)>,               \n"
-            "    \"currency\": \"<трьохлітерний_код_валюти>\",      \n"
-            "    \"category\": \"...\",                             \n"
-            "    \"description\": \"<короткий опис>\"               \n"
-            "  }\n\n"
-            "Поле \"category\" може приймати одне з: \"Ресторан\", \"доп їжа\", \"транспорт\", \"покупки\", \"розваги\", \"інше\", \"їжа\".\n"
-            "Правила (черговість перевірки):\n"
-            "  – Слова «ресторан», «кафе», «столова» → «Ресторан».\n"
-            "  – Слова «кава», «хот-дог», «Жабка», «печиво», «чай\" → «доп їжа».\n"
-            "  – «продукти», «супермаркет», «магазин\" → «їжа».\n"
-            "  – «таксі», «Uber», «Bolt», «метро», «автобус\" → «транспорт».\n"
-            "  – «купив», «ремонт», «квитки\" → «покупки».\n"
-            "  – «кіно», «театр», «концерт\", «відеогра\", «бар\" → «розваги».\n"
-            "  – Інакше → «інше».\n\n"
-            "Поле \"description\" — короткий опис: «обід у кафе», «хот-дог біля офісу» і т.д.\n\n"
-            f"Phrase: '{text}'"
+            "Ви — бот-помічник для українських фінансових витрат. "
+            "Поверніть ЛИШЕ JSON за схемою:\n"
+            "{\n"
+            "  \"amount\": <число (int/float)>\,\n"
+            "  \"currency\": \"<код_валюти (наприклад, USD, UAH, EUR, PLN)>\",\n"
+            "  \"category\": \"<категорія>\",\n"
+            "  \"description\": \"<короткий опис>\"\n"
+            "}\n\n"
+            "Категорії можуть бути: \"Ресторан\", \"доп їжа\", \"транспорт\", \"покупки\", \"розваги\", \"інше\", \"їжа\".\n"
+            "Правила визначення (перевірити послідовно):\n"
+            "  • \"ресторан\", \"кафе\", \"столова\" → \"Ресторан\"\n"
+            "  • \"кава\", \"хот-дог\", \"Жабка\", \"печиво\", \"чай\" → \"доп їжа\"\n"
+            "  • \"продукти\", \"супермаркет\", \"магазин\" → \"їжа\"\n"
+            "  • \"таксі\", \"Uber\", \"Bolt\", \"метро\", \"автобус\" → \"транспорт\"\n"
+            "  • \"купив\", \"ремонт\", \"квитки\" → \"покупки\"\n"
+            "  • \"кіно\", \"театр\", \"концерт\", \"відеогра\", \"бар\" → \"розваги\"\n"
+            "  • Інакше → \"інше\"\n\n"
+            f"Фраза: '{text}'"
         )
     else:
         prompt_details = (
-            "You are an assistant for parsing financial income. "
-            "You receive a phrase in Ukrainian. For example: 'I earned 500 dollars from freelancing'. "
-            "Return ONLY JSON with fields: amount (integer or float), currency (string, currency code, e.g. USD, UAH, EUR, PLN), "
-            "source (string, source of income, e.g. salary, freelancing, gift). "
+            "You are an assistant for parsing financial income in Ukrainian.\n"
+            "Return ONLY JSON with fields:\n"
+            "{\n"
+            "  \"amount\": <number>\,\n"
+            "  \"currency\": \"<USD, UAH, EUR, PLN>\",\n"
+            "  \"source\": \"<source_of_income>\"\n"
+            "}\n\n"
             f"Phrase: '{text}'"
         )
 
@@ -187,13 +159,13 @@ def process_transaction(text: str) -> dict:
             response_format={"type": "json_object"}
         )
         content_details = response_details.choices[0].message.content.strip()
-        print(f"Raw response from GPT details call: {content_details}")
+        print(f"Raw response: {content_details}")
 
         try:
             details_data = json.loads(content_details)
-            print(f"Parsed details data: {details_data}")
+            print(f"Parsed JSON: {details_data}")
         except json.JSONDecodeError:
-            print(f"JSON Decode Error on GPT details call: {content_details}")
+            print(f"JSON Decode Error: {content_details}")
             return {
                 "type": transaction_type,
                 "amount": 0,
@@ -212,45 +184,46 @@ def process_transaction(text: str) -> dict:
             category_or_source = details_data.get("source")
             description = None
 
-        print(f"Extracted – Amount: {amount}, Currency: {original_currency}, Category/Source: {category_or_source}, Description: {description}")
+        print(f"Extracted – amount: {amount}, currency: {original_currency}, category/source: {category_or_source}, description: {description}")
 
         converted_amount = amount
         final_currency = original_currency
 
+        # 3. Конвертація в PLN через ExchangeRate-API (якщо потрібно)
         if amount is None or not isinstance(amount, (int, float)) or float(amount) <= 0:
-            print(f"Warning: Amount invalid ({amount}). Пропускаємо конвертацію.")
+            print(f"Warning: Invalid amount ({amount}), skip conversion.")
         elif final_currency != "PLN":
-            print(f"Запит курсу з {final_currency} → PLN через ExchangeRate-API…")
+            print(f"Fetching exchange rate {final_currency}→PLN…")
             api_key = os.getenv("EXCHANGERATE_API_KEY")
             if not api_key:
-                print("Error: EXCHANGERATE_API_KEY не встановлено. Пропускаємо конвертацію.")
+                print("Error: EXCHANGERATE_API_KEY not set, skip conversion.")
             else:
                 api_url = f"https://v6.exchangerate-api.com/v6/{api_key}/latest/{final_currency}"
                 try:
-                    response = requests.get(api_url)
-                    response.raise_for_status()
-                    data = response.json()
-                    if data.get("result") == "success":
-                        rates = data.get("conversion_rates", {})
+                    resp = requests.get(api_url)
+                    resp.raise_for_status() # Raise an exception for bad status codes
+                    rate_data = resp.json()
+                    if rate_data.get("result") == "success":
+                        rates = rate_data.get("conversion_rates", {})
                         if "PLN" in rates:
                             rate = rates["PLN"]
-                            print(f"Курс {final_currency}→PLN: {rate}")
+                            print(f"Rate: 1 {original_currency} = {rate} PLN")
                             if rate and rate > 0:
                                 converted_amount = round(float(amount) * rate, 2)
                                 final_currency = "PLN"
-                                print(f"Успішно конвертовано: {converted_amount} PLN")
+                                print(f"Converted: {converted_amount} PLN")
                             else:
-                                print(f"Warning: Невірний курс ({rate}). Повертаємо оригінал.")
+                                print(f"Warning: Bad rate ({rate}), keep original.")
                         else:
-                            print(f"Error: PLN відсутній у {list(rates.keys())}.")
+                            print(f"Error: PLN not in rates keys {list(rates.keys())}.")
                     else:
-                        print(f"Error from ExchangeRate-API: {data.get('error-type', 'Unknown error')} .")
+                        print(f"Error from ExchangeRate-API: {rate_data.get('error-type', 'Unknown error')} .")
                 except requests.exceptions.RequestException as e:
-                    print(f"Network/API error: {e}.")
+                    print(f"Network/API error: {e}")
                 except Exception as e:
-                    print(f"Unexpected error при обробці відповіді ExchangeRate-API: {e}.")
+                    print(f"Unexpected error during ExchangeRate-API parse: {e}")
         else:
-            print("Валюта вже PLN, конвертація не потрібна.")
+            print("Currency already PLN, no conversion needed.")
 
         result = {
             "type": transaction_type,
@@ -260,11 +233,11 @@ def process_transaction(text: str) -> dict:
             "source": category_or_source if transaction_type == 'income' else None,
             "description": description
         }
-        print(f"Final processed transaction data: {result}")
+        print(f"Final transaction data: {result}")
         return result
 
     except Exception as e:
-        print(f"Error during transaction processing: {e}")
+        print(f"Error in process_transaction: {e}")
         return {
             "type": "error",
             "amount": 0,
@@ -283,49 +256,50 @@ def handle_transaction():
     if not text:
         return jsonify({"error": "Empty text"}), 400
 
-    processed_data = process_transaction(text)
-    if processed_data.get("type") == "error":
-        return jsonify({"error": processed_data.get("error", "Processing error")}), 500
+    processed = process_transaction(text)
+    if processed.get("type") == "error":
+        return jsonify({"error": processed.get("error", "Processing error")}), 500
 
-    transaction_type = processed_data.get("type", "expense")
+    tx_type = processed.get("type", "expense")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    amount = processed_data.get("amount")
-    final_currency = processed_data.get("currency", "PLN")
-    category = processed_data.get("category")
-    source = processed_data.get("source")
-    description = processed_data.get("description")
+    amount = processed.get("amount")
+    final_currency = processed.get("currency", "PLN")
+    category = processed.get("category")
+    source = processed.get("source")
+    description = processed.get("description")
 
-    if transaction_type == 'expense':
-        row_to_append = [timestamp, amount, final_currency, category, description]
-        print(f"Appending expense row (A-E): {row_to_append}")
+    # Визначаємо діапазон та рядок для запису в Google Sheets
+    if tx_type == 'expense':
+        # Для витрат записуємо в стовпці A-E
+        table_range = 'A1'
+        # Рядок має бути [timestamp, amount, currency, category, description]
+        vals = [timestamp, amount, final_currency, category, description]
+        print(f"Appending expense row to range {table_range}: {vals}")
     else:
+        # Для доходів записуємо в стовпці G-I
+        table_range = 'G1'
+        # Рядок має бути [income_date, income_amount, income_source]
+        # sheet.append_row вимагає, щоб кількість елементів в списку vals
+        # відповідала кількості стовпців від початку table_range (G) до потрібного кінця.
+        # Щоб записати лише в G, H, I, але почати з G1, нам потрібно передати список з 3 елементів.
         income_date = timestamp
         income_amount = amount
         income_source = source
-        row_to_append = [''] * 6 + [income_date, income_amount, income_source]
-        print(f"Appending income row (G-I): {row_to_append}")
+        vals = [income_date, income_amount, income_source]
+        print(f"Appending income row to range {table_range}: {vals}")
 
     try:
-        if transaction_type == 'expense':
-            table_range = 'A1'
-            values_to_append = row_to_append
-            print(f"Attempting to append expense row to {table_range}: {values_to_append}")
-        else:
-            table_range = 'G1'
-            values_to_append = [income_date, income_amount, income_source]
-            print(f"Attempting to append income row to {table_range}: {values_to_append}")
-
-        sheet.append_row(values_to_append, value_input_option='USER_ENTERED', table_range=table_range)
-        print("Row successfully appended to Google Sheet.")
+        sheet.append_row(vals, value_input_option='USER_ENTERED', table_range=table_range)
+        print("Row appended successfully.")
     except Exception as e:
-        print(f"Error appending row to Google Sheet: {e}")
-        return jsonify({"error": f"Failed to write to Google Sheet: {e}"}), 500
+        print(f"Error appending to Google Sheet: {e}")
+        return jsonify({"error": f"Failed writing to Google Sheet: {e}"}), 500
 
     return jsonify({
         "status": "ok",
-        "transaction_type": transaction_type,
-        "row": row_to_append,
-        "message": f"Successfully added {transaction_type}: {text}"
+        "transaction_type": tx_type,
+        "row": vals, # Повертаємо саме vals, який був записаний
+        "message": f"Successfully added {tx_type}: {text}"
     })
 
 
@@ -336,5 +310,6 @@ def health_check():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"Environment PORT: {os.environ.get('PORT')}, Using port: {port}")
-    app.run(host="0.0.0.0", port=port) 
+    print(f"Environment PORT: {os.environ.get('PORT', 'Not set')}, Using port: {port}") # Виправлено f-рядок
+    # Прив'язуємося до 0.0.0.0 для доступності ззовні в контейнері
+    app.run(host="0.0.0.0", port=port)
