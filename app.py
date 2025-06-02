@@ -191,7 +191,8 @@ def process_transaction(text: str) -> dict:
                             print(f"Available rates: {list(rates.keys())}") # Log available currencies for debugging
 
                     else:
-                        print(f"Error from ExchangeRate-API: {data.get("error-type", "Unknown error")}. Keeping original amount and currency.")
+                        # Use single quotes for the outer f-string
+                        print(f'Error from ExchangeRate-API: {data.get("error-type", "Unknown error")}. Keeping original amount and currency.')
                         # Keep original amount and currency
 
                 except requests.exceptions.RequestException as e:
