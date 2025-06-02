@@ -16,6 +16,26 @@ import requests # Add import for making HTTP requests
 
 load_dotenv()
 
+# --- Google Credentials Setup ---
+# This section handles credentials.json for deployment environments
+# On platforms like Render, we pass the JSON content via an environment variable
+# and write it to a file during startup.
+google_credentials_json_content = os.getenv("GOOGLE_CREDENTIALS_JSON")
+credentials_file_path = "credentials.json"
+
+if google_credentials_json_content:
+    print(f"GOOGLE_CREDENTIALS_JSON environment variable found. Writing to {credentials_file_path}")
+    try:
+        with open(credentials_file_path, "w") as f:
+            json.dump(json.loads(google_credentials_json_content), f, indent=None) # Use indent=None to save space
+        print(f"{credentials_file_path} created successfully.")
+    except Exception as e:
+        print(f"Error writing {credentials_file_path}: {e}")
+        # Depending on strictness, you might want to sys.exit(1) here
+else:
+    print("GOOGLE_CREDENTIALS_JSON not found. Assuming credentials.json exists locally or using other method.")
+# --- End Google Credentials Setup ---
+
 # Debug prints
 print("Environment variables:")
 print(f"OPENAI_API_KEY: {'*' * len(os.getenv('OPENAI_API_KEY', '')) if os.getenv('OPENAI_API_KEY') else 'Not set'}")
